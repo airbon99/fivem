@@ -17,6 +17,23 @@ inline bool IsCL2()
 	return isCl2;
 }
 
+inline bool IsCL3()
+{
+	static auto isCl3 = ([]()
+	{
+#ifndef IS_FXSERVER
+		if (wcsstr(GetCommandLineW(), L"cl3") != nullptr)
+		{
+			return true;
+		}
+#endif
+
+		return false;
+	})();
+
+	return isCl3;
+}
+
 namespace launch
 {
 inline bool IsSDKGuest()
@@ -81,6 +98,10 @@ inline const std::string& GetLaunchModeKey()
 		else if (IsCL2())
 		{
 			return "cl2";
+		}
+		else if (IsCL3())
+		{
+			return "cl3";
 		}
 
 		return "";

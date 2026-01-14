@@ -125,10 +125,20 @@ void RestartGameToOtherBuild(int build, int pureLevel, std::wstring poolSizesInc
 
 	static HostSharedData<CfxState> hostData("CfxInitState");
 
+	const wchar_t* launchMode = L"";
+	if (IsCL2())
+	{
+		launchMode = L"-cl2";
+	}
+	else if (IsCL3())
+	{
+		launchMode = L"-cl3";
+	}
+
 	auto cli = fmt::sprintf(L"\"%s\" %s %s %s -switchcl:%d \"%s://connect/%s\"",
 	hostData->gameExePath,
 	fmt::sprintf(L"-b%d", build),
-	IsCL2() ? L"-cl2" : L"",
+	launchMode,
 	pureLevel == 0 ? L"" : fmt::sprintf(L"-pure_%d", pureLevel),
 	(uintptr_t)switchEvent,
 	hostData->GetLinkProtocol(),

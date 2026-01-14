@@ -101,6 +101,9 @@ int __stdcall CfxBind(SOCKET s, sockaddr* addr, int addrlen)
 		if (wcsstr(GetCommandLine(), L"cl2"))
 		{
 			addrIn->sin_port = htons(6673);
+		} else if (wcsstr(GetCommandLine(), L"cl3"))
+		{
+			addrIn->sin_port = htons(6674);
 		}
 
 		g_gameSocket = s;
@@ -212,6 +215,10 @@ bool __cdecl GetLocalPeerAddressHook(rage::netPeerAddress* address)
 		{
 			a = htonl(inet_addr("127.0.0.1"));
 			b = 6673;
+		} else if (wcsstr(GetCommandLine(), L"cl3"))
+		{
+			a = htonl(inet_addr("127.0.0.1"));
+			b = 6674;
 		}
 
 		out->lanIP = a;

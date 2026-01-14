@@ -255,7 +255,11 @@ static InitFunction initFunction([]()
 #if defined(IS_FXSERVER)
 	static const int tcpServerPort = 29100;
 #else
-	static const int tcpServerPort = IsCL2() ? 29300 : 29200;
+	static const int tcpServerPort = []() {
+		if (IsCL2()) return 29300;
+		if (IsCL3()) return 29400;
+		return 29200;
+	}();
 #endif
 	static fwRefContainer<net::TcpServerManager> tcpStack = new net::TcpServerManager();
 	static fwRefContainer<net::TcpServer> tcpServer = tcpStack->CreateServer(

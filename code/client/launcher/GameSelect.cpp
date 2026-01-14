@@ -142,6 +142,9 @@ std::optional<int> EnsureGamePath()
 	if (wcsstr(GetCommandLine(), L"cl2"))
 	{
 		pathKey = L"PathCL2";
+	} else if (wcsstr(GetCommandLine(), L"cl3"))
+	{
+		pathKey = L"PathCL3";
 	}
 
 	if (GetFileAttributes(fpath.c_str()) != INVALID_FILE_ATTRIBUTES)

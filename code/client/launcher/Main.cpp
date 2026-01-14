@@ -810,8 +810,18 @@ int RealMain()
 
 	auto minModeManifest = InitMinMode();
 
-	g_uiExitEvent = CreateEventW(NULL, TRUE, FALSE, va(L"CitizenFX_PreUIExit%s", IsCL2() ? L"CL2" : L""));
-	g_uiDoneEvent = CreateEventW(NULL, FALSE, FALSE, va(L"CitizenFX_PreUIDone%s", IsCL2() ? L"CL2" : L""));
+	const wchar_t* eventSuffix = L"";
+	if (IsCL2())
+	{
+		eventSuffix = L"CL2";
+	}
+	else if (IsCL3())
+	{
+		eventSuffix = L"CL3";
+	}
+
+	g_uiExitEvent = CreateEventW(NULL, TRUE, FALSE, va(L"CitizenFX_PreUIExit%s", eventSuffix));
+	g_uiDoneEvent = CreateEventW(NULL, FALSE, FALSE, va(L"CitizenFX_PreUIDone%s", eventSuffix));
 
 	if (initState->IsMasterProcess() && !toolMode && !launch::IsSDK())
 	{
