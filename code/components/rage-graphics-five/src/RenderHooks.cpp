@@ -525,8 +525,15 @@ void DLL_EXPORT UiDone()
 	static HostSharedData<CfxState> initState("CfxInitState");
 	WaitForSingleObject(g_gameWindowEvent, INFINITE);
 
-	auto uiExitEvent = CreateEventW(NULL, TRUE, FALSE, va(L"CitizenFX_PreUIExit%s", IsCL2() ? L"CL2" : L""));
-	auto uiDoneEvent = CreateEventW(NULL, FALSE, FALSE, va(L"CitizenFX_PreUIDone%s", IsCL2() ? L"CL2" : L""));
+	std::wstring eventSuffix = L"";
+	int clNum = GetCLNumber();
+	if (clNum >= 2)
+	{
+		eventSuffix = L"CL" + std::to_wstring(clNum);
+	}
+
+	auto uiExitEvent = CreateEventW(NULL, TRUE, FALSE, va(L"CitizenFX_PreUIExit%s", eventSuffix.c_str()));
+	auto uiDoneEvent = CreateEventW(NULL, FALSE, FALSE, va(L"CitizenFX_PreUIDone%s", eventSuffix.c_str()));
 
 	if (uiExitEvent)
 	{

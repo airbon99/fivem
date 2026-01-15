@@ -1,20 +1,35 @@
 #pragma once
 
-inline bool IsCL2()
+inline int GetCLNumber()
 {
-	static auto isCl2 = ([]()
+	static auto clNumber = ([]()
 	{
 #ifndef IS_FXSERVER
-		if (wcsstr(GetCommandLineW(), L"cl2") != nullptr)
+		const wchar_t* cmdLine = GetCommandLineW();
+		const wchar_t* clPos = wcsstr(cmdLine, L"-cl");
+		
+		if (clPos != nullptr)
 		{
-			return true;
+			clPos += 3;
+			wchar_t* endPtr;
+			long num = wcstol(clPos, &endPtr, 10);
+			
+			if (endPtr != clPos && num >= 2)
+			{
+				return (int)num;
+			}
 		}
 #endif
 
-		return false;
+		return 0;
 	})();
 
-	return isCl2;
+	return clNumber;
+}
+
+inline bool IsCLX()
+{
+	return GetCLNumber() >= 2;
 }
 
 namespace launch
@@ -78,9 +93,10 @@ inline const std::string& GetLaunchModeKey()
 		{
 			return "fxdk";
 		}
-		else if (IsCL2())
+		else if (IsCLX())
 		{
-			return "cl2";
+			int clNum = GetCLNumber();
+			return "cl" + std::to_string(clNum);
 		}
 
 		return "";

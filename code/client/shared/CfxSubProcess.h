@@ -63,12 +63,11 @@ inline const wchar_t* MakeCfxSubProcess(const std::wstring& processType, const s
 #endif
 
 #ifndef IS_FXSERVER
-	if (wcsstr(GetCommandLine(), L"cl2") != nullptr)
+	int clNum = GetCLNumber();
+	if (clNum >= 2)
 	{
-		productName += L"cl2_";
-	}
-
-	if (wcsstr(GetCommandLine(), L"fxdk") != nullptr)
+		productName += L"cl" + std::to_wstring(clNum) + L"_";
+	} else if (wcsstr(GetCommandLine(), L"fxdk") != nullptr)
 	{
 		productName += L"fxdk_";
 	}

@@ -112,9 +112,10 @@ int __stdcall CfxBind(SOCKET s, sockaddr* addr, int addrlen)
 
 	if (htons(addrIn->sin_port) == 6672)
 	{
-		if (wcsstr(GetCommandLine(), L"cl2"))
+		int clNum = GetCLNumber();
+		if (clNum >= 2)
 		{
-			addrIn->sin_port = htons(6673);
+			addrIn->sin_port = htons(6672 + clNum - 1);
 		}
 
 		g_gameSocket = s;
@@ -129,9 +130,12 @@ int __stdcall CfxGetSockName(SOCKET s, struct sockaddr* name, int* namelen)
 
 	sockaddr_in* addrIn = (sockaddr_in*)name;
 
-	if (s == g_gameSocket && wcsstr(GetCommandLine(), L"cl2"))
-	{
-		addrIn->sin_port = htons(6672);
+	if (s == g_gameSocket) {
+		int clNum = GetCLNumber();
+		if (clNum >= 2)
+		{
+			addrIn->sin_port = htons(6672 + clNum - 1);
+		}
 	}
 
 	return retval;

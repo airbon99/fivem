@@ -289,9 +289,12 @@ static auto GetMinidumpGamePath() -> std::wstring
 
 		const wchar_t* pathKey = L"IVPath";
 
-		if (wcsstr(GetCommandLine(), L"cl2"))
+		int clNum = GetCLNumber();
+		if (clNum >= 2)
 		{
-			pathKey = L"PathCL2";
+			static std::wstring pathKeyStr;
+			pathKeyStr = L"PathCL" + std::to_wstring(clNum);
+			pathKey = pathKeyStr.c_str();
 		}
 
 		GetPrivateProfileString(L"Game", pathKey, L"", path, _countof(path), fpath.c_str());

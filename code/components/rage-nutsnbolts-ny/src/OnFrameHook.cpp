@@ -80,9 +80,8 @@ static HookFunction hookFunction([] ()
 	hook::call(hook::get_pattern("E8 ? ? ? ? B9 ? ? ? ? 5E E9 ? ? ? ? CC CC"), runFrame);
 	hook::call(hook::pattern("83 3F 00 76 ? FF D5 39").count(2).get(1).get<intptr_t>(-48), runFrame);
 
-	if (wcsstr(GetCommandLine(), L"cl2"))
+	if (IsCLX())
 	{
-		// don't whine about game already running for cl2
 		hook::put(hook::get_pattern("47 54 41 4E 59 2D 30 38 38"), 'ATGN');
 	}
 

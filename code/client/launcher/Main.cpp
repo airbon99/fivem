@@ -810,8 +810,15 @@ int RealMain()
 
 	auto minModeManifest = InitMinMode();
 
-	g_uiExitEvent = CreateEventW(NULL, TRUE, FALSE, va(L"CitizenFX_PreUIExit%s", IsCL2() ? L"CL2" : L""));
-	g_uiDoneEvent = CreateEventW(NULL, FALSE, FALSE, va(L"CitizenFX_PreUIDone%s", IsCL2() ? L"CL2" : L""));
+	std::wstring eventSuffix = L"";
+	int clNum = GetCLNumber();
+	if (clNum >= 2)
+	{
+		eventSuffix = L"CL" + std::to_wstring(clNum);
+	}
+
+	g_uiExitEvent = CreateEventW(NULL, TRUE, FALSE, va(L"CitizenFX_PreUIExit%s", eventSuffix.c_str()));
+	g_uiDoneEvent = CreateEventW(NULL, FALSE, FALSE, va(L"CitizenFX_PreUIDone%s", eventSuffix.c_str()));
 
 	if (initState->IsMasterProcess() && !toolMode && !launch::IsSDK())
 	{

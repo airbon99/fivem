@@ -24,7 +24,12 @@ struct DatabaseHolder
 		options.env = GetVFSEnvironment();
 		options.create_if_missing = true;
 
-		std::string dbName = IsCL2() ? "fxd:/kvs_cl2/" : "fxd:/kvs/";
+		std::string dbName = "fxd:/kvs/";
+		int clNum = GetCLNumber();
+		if (clNum >= 2)
+		{
+			dbName = "fxd:/kvs_cl" + std::to_string(clNum) + "/";
+		}
 		auto status = leveldb::DB::Open(options, dbName, &dbPointer);
 
 		if (!status.ok())
