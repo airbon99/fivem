@@ -19,9 +19,17 @@ namespace fx
 		{
 			std::atomic<int32_t> refCount;
 			std::function<void(const msgpack::unpacked&)> callback;
+			std::function<msgpack::sbuffer(const msgpack::unpacked&)> callbackWithReturn;
+			bool hasReturn;
 
 			RefData(std::function<void(const msgpack::unpacked&)> cb)
-				: callback(cb), refCount(0)
+				: callback(cb), callbackWithReturn(nullptr), refCount(0), hasReturn(false)
+			{
+
+			}
+
+			RefData(std::function<msgpack::sbuffer(const msgpack::unpacked&)> cb)
+				: callback(nullptr), callbackWithReturn(cb), refCount(0), hasReturn(true)
 			{
 
 			}
@@ -32,7 +40,7 @@ namespace fx
 		std::recursive_mutex m_refMutex;
 
 		int32_t m_refIdx;
-
+	std::string AddCallbackRefInternal(std::unique_ptr<RefData> refData);
 	public:
 		ResourceCallbackScriptRuntime();
 
@@ -41,6 +49,7 @@ namespace fx
 		NS_DECL_ISCRIPTREFRUNTIME;
 
 		std::string AddCallbackRef(const std::function<void(const msgpack::unpacked&)>& resultCallback);
+		std::string AddCallbackRefWithReturn(const std::function<msgpack::sbuffer(const msgpack::unpacked&)>& resultCallback);	
 	};
 
 	class ResourceCallbackComponent : public fwRefCountable
@@ -78,6 +87,8 @@ namespace fx
 		}
 
 		virtual CallbackRef CreateCallback(const std::function<void(const msgpack::unpacked&)>&);
+
+		virtual CallbackRef CreateCallbackWithReturn(const std::function<msgpack::sbuffer(const msgpack::unpacked&)>&);
 	};
 
 	class FunctionRef

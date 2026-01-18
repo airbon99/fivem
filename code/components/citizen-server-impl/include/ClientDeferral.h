@@ -71,6 +71,8 @@ public:
 
 	bool IsDeferred();
 
+	bool IsDone(const std::string& resourceName);
+
 	void UpdateDeferrals();
 
 	void RanEvents();

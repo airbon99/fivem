@@ -331,6 +331,37 @@ TCallbackMap ClientDeferral::GetCallbacks()
 		self->UpdateDeferrals();
 	}));
 
+	cbs["isDone"] = cbComponent->CreateCallbackWithReturn([ref](const msgpack::unpacked& unpacked) -> msgpack::sbuffer
+	{
+		auto defRef = ref->deferral.lock();
+
+		msgpack::sbuffer sb;
+		msgpack::packer<msgpack::sbuffer> packer(sb);
+
+		if (!defRef || defRef->m_completed)
+		{
+			packer.pack_array(1);
+			packer.pack(false);
+			return sb;
+		}
+
+		auto obj = unpacked.get().as<std::vector<msgpack::object>>();
+
+		if (obj.size() >= 1)
+		{
+			std::string targetResourceName = obj[0].as<std::string>();
+			bool result = defRef->IsDone(targetResourceName);
+			
+			packer.pack_array(1);
+			packer.pack(result);
+			return sb;
+		}
+
+		packer.pack_array(1);
+		packer.pack(false);
+		return sb;
+	});
+
 	cbs["handover"] = cbComponent->CreateCallback(createDeferralCallback([](const std::shared_ptr<ClientDeferral>& self, const std::string& deferralKey, const msgpack::unpacked& unpacked)
 	{
 		auto obj = unpacked.get().as<std::vector<msgpack::object>>();
@@ -364,5 +395,17 @@ TCallbackMap ClientDeferral::GetCallbacks()
 	}));
 
 	return cbs;
+}
+
+bool ClientDeferral::IsDone(const std::string& resourceName)
+{
+	auto it = m_deferralStates.find(resourceName);
+	
+	if (it == m_deferralStates.end())
+	{
+		return false;
+	}
+	
+	return it->second.done;
 }
 }

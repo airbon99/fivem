@@ -108,6 +108,8 @@ result_t ResourceCallbackScriptRuntime::CallRef(int32_t refIdx, char* argsSerial
 
 	// assume we have the ref still
 	std::function<void(const msgpack::unpacked&)> cb;
+	std::function<msgpack::sbuffer(const msgpack::unpacked&)> cbWithReturn;
+	bool hasReturn = false;
 
 	{
 		std::unique_lock<std::recursive_mutex> lock(m_refMutex);
@@ -119,7 +121,26 @@ result_t ResourceCallbackScriptRuntime::CallRef(int32_t refIdx, char* argsSerial
 			return FX_E_INVALIDARG;
 		}
 
-		cb = it->second->callback;
+		hasReturn = it->second->hasReturn;
+		
+		if (hasReturn)
+		{
+			cbWithReturn = it->second->callbackWithReturn;
+			
+			if (!cbWithReturn)
+			{
+				return FX_E_INVALIDARG;
+			}
+		}
+		else
+		{
+			cb = it->second->callback;
+			
+			if (!cb)
+			{
+				return FX_E_INVALIDARG;
+			}
+		}
 	}
 
 	// unpack
@@ -127,7 +148,16 @@ result_t ResourceCallbackScriptRuntime::CallRef(int32_t refIdx, char* argsSerial
 	msgpack::unpack(unpacked, argsSerialized, argsLength);
 
 	// convert
-	cb(unpacked);
+	if (hasReturn)
+	{
+		msgpack::sbuffer resultBuffer = cbWithReturn(unpacked);
+		auto result = fx::MemoryScriptBuffer::Make(resultBuffer.data(), static_cast<uint32_t>(resultBuffer.size()));
+		result.CopyTo(retval);
+	}
+	else
+	{
+		cb(unpacked);
+	}
 
 	return FX_S_OK;
 }
@@ -177,18 +207,26 @@ result_t ResourceCallbackScriptRuntime::RemoveRef(int32_t refIdx)
 	return FX_S_OK;
 }
 
-std::string ResourceCallbackScriptRuntime::AddCallbackRef(const std::function<void(const msgpack::unpacked&)>& resultCallback)
+std::string ResourceCallbackScriptRuntime::AddCallbackRefInternal(std::unique_ptr<RefData> refData)
 {
 	std::unique_lock<std::recursive_mutex> lock(m_refMutex);
 
-	// add the ref to the list
 	int32_t idx = m_refIdx;
-	m_refs.emplace(idx, std::make_unique<RefData>(resultCallback));
+	m_refs.emplace(idx, std::move(refData));
 
 	m_refIdx++;
 
-	// matches TestScriptHost::CanonicalizeRef
 	return fmt::sprintf("%s:%d:%d", "_cfx_internal", 0, idx);
+}
+
+std::string ResourceCallbackScriptRuntime::AddCallbackRef(const std::function<void(const msgpack::unpacked&)>& resultCallback)
+{
+	return AddCallbackRefInternal(std::make_unique<RefData>(resultCallback));
+}
+
+std::string ResourceCallbackScriptRuntime::AddCallbackRefWithReturn(const std::function<msgpack::sbuffer(const msgpack::unpacked&)>& resultCallback)
+{
+	return AddCallbackRefInternal(std::make_unique<RefData>(resultCallback));
 }
 
 ResourceCallbackComponent::ResourceCallbackComponent(fx::ResourceManager* manager)
@@ -207,6 +245,11 @@ ResourceCallbackComponent::ResourceCallbackComponent(fx::ResourceManager* manage
 auto ResourceCallbackComponent::CreateCallback(const std::function<void(const msgpack::unpacked &)>& cb) -> CallbackRef
 {
 	return CallbackRef{ this->GetScriptRuntime()->AddCallbackRef(cb) };
+}
+
+auto ResourceCallbackComponent::CreateCallbackWithReturn(const std::function<msgpack::sbuffer(const msgpack::unpacked &)>& cb) -> CallbackRef
+{
+	return CallbackRef{ this->GetScriptRuntime()->AddCallbackRefWithReturn(cb) };
 }
 }
 
