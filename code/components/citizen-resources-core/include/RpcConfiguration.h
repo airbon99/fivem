@@ -96,6 +96,11 @@ public:
 			return m_name;
 		}
 
+		inline void SetName(std::string name)
+		{
+			m_name = std::move(name);
+		}
+
 		inline uint64_t GetGameHash() const
 		{
 			return m_gameHash;
