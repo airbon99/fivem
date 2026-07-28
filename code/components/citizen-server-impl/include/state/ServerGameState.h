@@ -1448,6 +1448,14 @@ public:
 
 	void ReassignEntity(uint32_t entityHandle, const fx::ClientSharedPtr& targetClient, std::unique_lock<std::shared_mutex>&& lock = {});
 
+	// Relevance-gated ownership transfer for scripts (NETWORK_SET_ENTITY_OWNER).
+	// Reassigns the entity to targetNetId ONLY if the target is genuinely able to hold it
+	// (same routing bucket, entity relevant to the target, and the target has actually
+	// created/instantiated the entity). Returns false (no reassignment) otherwise, so a
+	// script can never move ownership onto a client that would instantly become a stuck,
+	// game-object-less owner.
+	bool SetEntityOwner(uint32_t entityHandle, uint16_t targetNetId);
+
 	bool SetEntityStateBag(uint8_t playerId, uint16_t objectId, std::function<std::shared_ptr<StateBag>()> createStateBag) override;
 
 	uint32_t GetClientRoutingBucket(const fx::ClientSharedPtr& client) override;

@@ -2727,6 +2727,79 @@ void ServerGameState::ReassignEntity(uint32_t entityHandle, const fx::ClientShar
 #endif
 }
 
+bool ServerGameState::SetEntityOwner(uint32_t entityHandle, uint16_t targetNetId)
+{
+	auto entity = GetEntity(0, entityHandle);
+
+	// don't touch entities that don't exist or are being torn down
+	if (!entity || entity->deleting || entity->finalizing)
+	{
+		return false;
+	}
+
+	// a client can have only one player; players are bound to their own client
+	if (entity->type == sync::NetObjEntityType::Player)
+	{
+		return false;
+	}
+
+	auto targetClient = m_instance->GetComponent<fx::ClientRegistry>()->GetClientByNetID(targetNetId);
+
+	if (!targetClient || !targetClient->HasSlotId())
+	{
+		return false;
+	}
+
+	auto targetSlot = targetClient->GetSlotId();
+
+	// the target must be in the same routing bucket as the entity
+	{
+		auto targetData = GetClientDataUnlocked(this, targetClient);
+
+		if (!targetData || targetData->routingBucket != entity->routingBucket)
+		{
+			return false;
+		}
+	}
+
+	// relevance gate #1: the entity must be relevant to the target (i.e. the server streams
+	// it to them). without this we'd be handing ownership to a client that isn't even in
+	// range of the entity.
+	{
+		std::shared_lock _(entity->guidMutex);
+
+		if (!entity->relevantTo.test(targetSlot))
+		{
+			return false;
+		}
+	}
+
+	// relevance gate #2: the target must have actually created (instantiated) the entity,
+	// meaning it holds a real game object and can service ownership. this is the check that
+	// #2312's raw NetworkSetEntityOwner lacked: it prevents reassigning to a client that
+	// would immediately become a stuck owner (a netObject without a game object).
+	{
+		auto [lock, targetData] = GetClientData(this, targetClient);
+
+		auto entIt = targetData->syncedEntities.find(MakeHandleUniqifierPair(entity->handle, entity->uniqifier));
+
+		if (entIt == targetData->syncedEntities.end() || !entIt->second.hasCreated)
+		{
+			return false;
+		}
+	}
+
+	// already owned by the target: nothing to do, but report success
+	if (entity->GetClient() == targetClient)
+	{
+		return true;
+	}
+
+	ReassignEntity(entityHandle, targetClient);
+
+	return true;
+}
+
 bool ServerGameState::SetEntityStateBag(uint8_t playerId, uint16_t objectId, std::function<std::shared_ptr<StateBag>()> createStateBag) 
 {
 	if (auto entity = GetEntity(0, objectId))

@@ -242,6 +242,24 @@ static void Init()
         return retval;
     }));
 
+	fx::ScriptEngine::RegisterNativeHandler("NETWORK_SET_ENTITY_OWNER", makeEntityFunction([](fx::ScriptContext& context, const fx::sync::SyncEntityPtr& entity)
+	{
+		// get the current resource manager
+		auto resourceManager = fx::ResourceManager::GetCurrent();
+
+		// get the owning server instance
+		auto instance = resourceManager->GetComponent<fx::ServerInstanceBaseRef>()->Get();
+
+		// get the server's game state
+		auto gameState = instance->GetComponent<fx::ServerGameState>();
+
+		auto targetNetId = context.GetArgument<uint32_t>(1);
+
+		// SetEntityOwner does the relevance gating; it only reassigns to a client that can
+		// actually hold the entity, and returns false otherwise.
+		return gameState->SetEntityOwner(entity->handle, static_cast<uint16_t>(targetNetId));
+	}));
+
 	fx::ScriptEngine::RegisterNativeHandler("SET_ENTITY_ORPHAN_MODE", [](fx::ScriptContext& context)
     {
 		// get the current resource manager
