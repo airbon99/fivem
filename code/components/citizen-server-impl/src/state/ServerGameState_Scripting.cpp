@@ -1617,6 +1617,35 @@ static void Init()
 		return true;
 	}));
 
+	// NETWORK_MIGRATE_ENTITY(entity, playerSrc)
+	// Forces ownership of an entity onto a specific client. Deliberately does NOT run
+	// IsMigrationEligible() - the automatic better-owner pass has to be conservative,
+	// a script asking for this explicitly is assumed to know what it is doing.
+	fx::ScriptEngine::RegisterNativeHandler("NETWORK_MIGRATE_ENTITY", [](fx::ScriptContext& context)
+	{
+		auto instance = fx::ResourceManager::GetCurrent()->GetComponent<fx::ServerInstanceBaseRef>()->Get();
+		auto gameState = instance->GetComponent<fx::ServerGameState>();
+
+		auto entity = gameState->GetEntity(context.GetArgument<uint32_t>(0));
+
+		if (!IsEntityValid(entity))
+		{
+			context.SetResult(false);
+			return;
+		}
+
+		auto client = instance->GetComponent<fx::ClientRegistry>()->GetClientByNetID(context.GetArgument<uint32_t>(1));
+
+		if (!client || !client->HasSlotId())
+		{
+			context.SetResult(false);
+			return;
+		}
+
+		gameState->ReassignEntity(entity->handle, client);
+		context.SetResult(true);
+	});
+
 	fx::ScriptEngine::RegisterNativeHandler("GET_PLAYER_ROUTING_BUCKET", MakeClientFunction([](fx::ScriptContext& context, const fx::ClientSharedPtr& client)
 	{
 		// get the current resource manager

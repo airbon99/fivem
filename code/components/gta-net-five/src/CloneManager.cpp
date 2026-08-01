@@ -69,6 +69,10 @@ static constexpr int kSyncPacketMaxLength = 2400;
 void ObjectIds_AddObjectId(int objectId);
 void ObjectIds_StealObjectId(int objectId);
 void ObjectIds_ConfirmObjectId(int objectId);
+void ObjectIds_RemoveObjectId(int objectId); // defined in ObjectIdManager.cpp
+
+// how often we may tell the server we can no longer sync an owned object (see WriteUpdates)
+static constexpr auto kRelinquishInterval = std::chrono::milliseconds{ 1000 };
 
 void AssociateSyncTree(int objectId, rage::netSyncTree* syncTree);
 
@@ -245,13 +249,16 @@ private:
 		uint16_t pendingClientId;
 		uint32_t dontSyncBefore;
 
+		// rate limit for the out-of-scene relinquish message (see WriteUpdates)
+		std::chrono::milliseconds lastRelinquish;
+
 		inline ExtendedCloneData()
-			: clientId(0), pendingClientId(-1), dontSyncBefore(0)
+			: clientId(0), pendingClientId(-1), dontSyncBefore(0), lastRelinquish(0)
 		{
 		}
 
 		inline ExtendedCloneData(uint16_t clientId)
-			: clientId(clientId), pendingClientId(-1), dontSyncBefore(0)
+			: clientId(clientId), pendingClientId(-1), dontSyncBefore(0), lastRelinquish(0)
 		{
 		}
 	};
@@ -1348,6 +1355,52 @@ void CloneManagerLocal::CheckMigration(const msgClone& msg)
 				obj->syncData.isRemote = true;
 				obj->syncData.nextOwnerId = -1;
 			}
+			else
+			{
+				// ------------------------------------------------------------------
+				// FIX: the new owner does not exist as a CNetGamePlayer on this machine.
+				//
+				// In BigMode/Infinity, players are only created for each other while in
+				// scope (ServerGameState.cpp - the BigMode branch does NOT set isRelevant
+				// for Player entities). The server can therefore quite legitimately hand
+				// an entity to a client we know nothing about.
+				//
+				// The original code simply skipped ChangeOwner in that case. For an object
+				// that was already remote that is harmless - ownerId is 31 either way, and
+				// extData.clientId is updated below. But if we were holding the object
+				// LOCALLY, we stay convinced it is ours while the server already knows it
+				// is not: we keep sending syncs that the server rejects as "wrong owner"
+				// (see ProcessClonePacket), and nothing brings the two back in line.
+				//
+				// So demote it to a plain remote clone owned by the placeholder player 31 -
+				// exactly the state HandleCloneCreate would have produced for a remote
+				// object. netObject__GetPlayerOwner() will resolve the real owner from
+				// extData.clientId as soon as that player does come into scope.
+				//
+				// NOTE: we deliberately do not call rage::netObjectMgr::ChangeOwner with
+				// GetPlayer31() here - CloneManagerLocal::ChangeOwner would look up
+				// g_netIdsByPlayer[player31], which does not exist, and send a takeover
+				// message addressed to net ID 0. Hence the manual state fixup.
+				// ------------------------------------------------------------------
+				if (!obj->syncData.isRemote)
+				{
+					Log("%s: object %s reassigned to unknown client %d; demoting to remote\n",
+						__func__, obj->ToString(), clientId);
+
+					// hand the object ID back to the server pool - it is not ours anymore
+					ObjectIds_RemoveObjectId(obj->GetObjectId());
+				}
+
+				auto oldOwnerId = obj->syncData.ownerId;
+
+				obj->syncData.isRemote = true;
+				obj->syncData.ownerId = 31;
+				obj->syncData.nextOwnerId = -1;
+
+				// keep m_netObjects consistent, same as CloneManagerLocal::ChangeOwner does
+				m_netObjects[oldOwnerId].erase(obj->GetObjectId());
+				m_netObjects[31][obj->GetObjectId()] = obj;
+			}
 		}
 
 		// this should happen AFTER AddObjectForPlayer, it verifies the object owner
@@ -2117,11 +2170,47 @@ void CloneManagerLocal::WriteUpdates()
 		}
 
 		// don't sync netobjs that aren't in the scene
-		// #TODO1S: remove netobjs from the server if they're removed from the scene?
 		if (object->GetGameObject())
 		{
 			if (!fwEntity_IsInScene(object->GetGameObject()))
 			{
+				// ------------------------------------------------------------------
+				// FIX for the old "#TODO1S: remove netobjs from the server if they're
+				// removed from the scene?" that used to sit above this block.
+				//
+				// The object is still ours, but the game no longer keeps it in the scene
+				// graph, so we cannot produce a valid sync for it. Previously we just went
+				// silent: the server only noticed via the (now - lastReceivedAt) > 10s
+				// watchdog, and even then only if we sent no other sync in the meantime -
+				// which an owner hovering around the culling boundary keeps doing, so the
+				// watchdog never fires and the entity stays stuck with us.
+				//
+				// Instead, explicitly give up ownership. The server then runs
+				// MoveEntityToCandidate right away and hands the entity to the nearest
+				// relevant client, with no 10 second wait.
+				//
+				// Rate limited to one message per kRelinquishInterval so retransmits do
+				// not flood the send buffer before the server processes the first one.
+				// ------------------------------------------------------------------
+				auto& ext = m_extendedData[object->GetObjectId()];
+				auto now = msec();
+
+				if ((now - ext.lastRelinquish) > kRelinquishInterval)
+				{
+					ext.lastRelinquish = now;
+
+					// msg type 4 (takeover) with the reserved client ID 0xFFFF meaning
+					// "to nobody in particular". Older servers ignore it, older clients
+					// never send it, so the extension is backwards compatible both ways.
+					m_sendBuffer.Write(3, 4);
+					m_sendBuffer.Write(16, 0xFFFF);
+					m_sendBuffer.Write(13, object->GetObjectId());
+
+					AttemptFlushCloneBuffer();
+
+					Log("%s: relinquishing %s - not in scene\n", __func__, object->ToString());
+				}
+
 				return;
 			}
 		}

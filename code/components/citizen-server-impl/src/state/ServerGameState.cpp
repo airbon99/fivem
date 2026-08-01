@@ -84,6 +84,18 @@ std::shared_ptr<ConVar<bool>> g_oneSyncEnabledVar;
 std::shared_ptr<ConVar<bool>> g_oneSyncCulling;
 std::shared_ptr<ConVar<bool>> g_oneSyncVehicleCulling;
 std::shared_ptr<ConVar<bool>> g_oneSyncForceMigration;
+std::shared_ptr<ConVar<bool>> g_oneSyncBetterOwner;
+
+// Better-owner migration tunables, mirrored from R*'s NetObjProximityMigrateable.cpp.
+// OneSync has no equivalent of TryToPassControlProximity: ownership only moves when the
+// owner fully loses relevance (wantsReassign), on disconnect, or via the 10s stuck
+// watchdog. An owner hovering around the culling boundary keeps satisfying relevance
+// often enough that none of those three fire, so the entity stays pinned to a distant
+// owner while someone is standing next to it.
+static constexpr auto kBetterOwnerCheckInterval = std::chrono::milliseconds{ 500 };  // CONTROL_TIME
+static constexpr auto kBetterOwnerHoldTime = std::chrono::milliseconds{ 3000 };      // CONTROL_HOLD_TIME
+static constexpr float kMinOwnerDistSq = 25.0f * 25.0f;                              // ~CONTROL_DIST_MIN_SQR
+static constexpr float kBetterOwnerHysteresisSq = 0.8f * 0.8f;                       // R* uses 0.9f against scope
 std::shared_ptr<ConVar<bool>> g_oneSyncRadiusFrequency;
 std::shared_ptr<ConVar<std::string>> g_oneSyncLogVar;
 std::shared_ptr<ConVar<bool>> g_oneSyncWorkaround763185;
@@ -919,6 +931,12 @@ void ServerGameState::Tick(fx::ServerInstanceBase* instance)
 
 	int maxValidEntity = 0;
 
+	// better-owner migration: entities are collected while m_entityListMutex is held and
+	// processed *after* it is released, since ReassignEntity() takes entity->clientMutex
+	// and the per-client data locks (lock ordering).
+	const auto nowMs = msec();
+	eastl::fixed_vector<std::pair<fx::sync::SyncEntityPtr, glm::vec3>, 64, true> betterOwnerWork;
+
 	{
 		std::unique_lock _(m_entityListMutex);
 		for (auto entityIt = m_entityList.begin(), entityEnd = m_entityList.end(); entityIt != entityEnd;)
@@ -990,9 +1008,28 @@ void ServerGameState::Tick(fx::ServerInstanceBase* instance)
 				vehicleData = entity->syncTree->GetVehicleGameState();
 			}
 			
+			// --- better-owner candidate? ---
+			// Only collect here; ReassignEntity is called after m_entityListMutex is released.
+			if (g_oneSyncBetterOwner->GetValue()
+				&& (nowMs - entity->lastMigratedAt) > kBetterOwnerHoldTime
+				&& (nowMs - entity->lastBetterOwnerCheck) > kBetterOwnerCheckInterval)
+			{
+				entity->lastBetterOwnerCheck = nowMs;
+
+				if (IsMigrationEligible(entity))
+				{
+					betterOwnerWork.emplace_back(entity, entityPosition);
+				}
+			}
+
 			relevantEntities[maxValidEntity] = { entity, entityPosition, vehicleData, entity->GetClient() };
 			maxValidEntity++;
 		}
+	}
+
+	for (auto& [betterOwnerEntity, betterOwnerPos] : betterOwnerWork)
+	{
+		TryBetterOwner(betterOwnerEntity, betterOwnerPos, nowMs);
 	}
 
 	auto creg = instance->GetComponent<fx::ClientRegistry>();
@@ -2836,9 +2873,15 @@ bool ServerGameState::MoveEntityToCandidate(const fx::sync::SyncEntityPtr& entit
 
 				candidates.emplace(distance, tgtClient);
 
-				if (candidates.size() >= maxCandidates)
+				// Scan ALL relevant clients but keep only the maxCandidates nearest.
+				// The original code broke out of the scan after collecting maxCandidates
+				// entries while walking slot IDs from high to low, so it effectively picked
+				// "the nearest of the first five by slot order", not the nearest overall.
+				if (candidates.size() > maxCandidates)
 				{
-					break;
+					auto worst = candidates.end();
+					--worst;
+					candidates.erase(worst);
 				}
 			}
 		}
@@ -2866,6 +2909,152 @@ bool ServerGameState::MoveEntityToCandidate(const fx::sync::SyncEntityPtr& entit
 	}
 
 	return true;
+}
+
+// ---------------------------------------------------------------------------
+// Better-owner migration.
+//
+// Restores R*'s proximity migration policy on top of OneSync: if some client is
+// substantially closer to an entity than its current owner, hand the entity over.
+// See the tunables near the top of this file for the R* constants this mirrors.
+// ---------------------------------------------------------------------------
+
+static float FocusDistanceSq(fx::ServerGameState* sgs, const fx::ClientSharedPtr& client, const glm::vec3& pos)
+{
+	auto data = GetClientDataUnlocked(sgs, client);
+
+	fx::sync::SyncEntityPtr playerEntity;
+	{
+		std::shared_lock _(data->playerEntityMutex);
+		playerEntity = data->playerEntity.lock();
+	}
+
+	if (!playerEntity)
+	{
+		return std::numeric_limits<float>::max();
+	}
+
+	auto tgts = GetPlayerFocusPos(playerEntity);
+	float best = std::numeric_limits<float>::max();
+
+	for (auto& t : tgts)
+	{
+		best = std::min(best, glm::distance2(t, pos));
+	}
+
+	return best;
+}
+
+bool ServerGameState::IsMigrationEligible(const fx::sync::SyncEntityPtr& entity)
+{
+	if (entity->deleting || entity->finalizing || !entity->hasSynced || !entity->passedFilter)
+	{
+		return false;
+	}
+
+	// players never migrate (ReassignEntityInner bails on them anyway)
+	if (entity->type == sync::NetObjEntityType::Player)
+	{
+		return false;
+	}
+
+	if (!entity->syncTree)
+	{
+		return false;
+	}
+
+	// R*: CNetObjVehicle::CanPassControl refuses to hand off an occupied vehicle.
+	// This path bypasses CanPassControl entirely, so the check has to live here -
+	// without it we would yank a vehicle out from under its driver.
+	if (entity->type == sync::NetObjEntityType::Automobile ||
+		entity->type == sync::NetObjEntityType::Bike ||
+		entity->type == sync::NetObjEntityType::Boat ||
+		entity->type == sync::NetObjEntityType::Heli ||
+		entity->type == sync::NetObjEntityType::Plane ||
+		entity->type == sync::NetObjEntityType::Submarine ||
+		entity->type == sync::NetObjEntityType::Trailer ||
+#ifdef STATE_RDR3
+		entity->type == sync::NetObjEntityType::DraftVeh ||
+#endif
+		entity->type == sync::NetObjEntityType::Train)
+	{
+		if (auto vd = entity->syncTree->GetVehicleGameState())
+		{
+			if (vd->playerOccupants.any())
+			{
+				return false;
+			}
+		}
+	}
+
+	return true;
+}
+
+void ServerGameState::TryBetterOwner(const fx::sync::SyncEntityPtr& entity, const glm::vec3& entityPos, std::chrono::milliseconds now)
+{
+	auto owner = entity->GetClient();
+
+	// unowned entities are already handled by the existing yoink path in Tick (!cl branch)
+	if (!owner || !owner->HasSlotId())
+	{
+		return;
+	}
+
+	float ownerDistSq = FocusDistanceSq(this, owner, entityPos);
+
+	// owner is close enough - leave it alone (R*: CONTROL_DIST_MIN_SQR)
+	if (ownerDistSq < kMinOwnerDistSq)
+	{
+		return;
+	}
+
+	const auto& clientRegistry = m_instance->GetComponent<fx::ClientRegistry>();
+
+	fx::ClientSharedPtr best;
+	float bestDistSq = ownerDistSq * kBetterOwnerHysteresisSq;
+
+	decltype(entity->relevantTo) candidateSet;
+	{
+		std::shared_lock _(entity->guidMutex);
+		candidateSet = entity->relevantTo;
+	}
+
+	for (auto bit = candidateSet.find_last(); bit != decltype(candidateSet)::kSize; bit = candidateSet.find_prev(bit))
+	{
+		auto tgt = clientRegistry->GetClientBySlotID(bit);
+
+		if (!tgt || tgt == owner)
+		{
+			continue;
+		}
+
+		// candidate has to sit in the same routing bucket as the entity
+		{
+			auto tgtData = GetClientDataUnlocked(this, tgt);
+
+			if (tgtData->routingBucket != entity->routingBucket)
+			{
+				continue;
+			}
+		}
+
+		float d = FocusDistanceSq(this, tgt, entityPos);
+
+		if (d < bestDistSq)
+		{
+			bestDistSq = d;
+			best = tgt;
+		}
+	}
+
+	if (best)
+	{
+		GS_LOG("better owner for entity %d: %s (%.1fm) beats %s (%.1fm)\n",
+			entity->handle, best->GetName(), std::sqrt(bestDistSq), owner->GetName(), std::sqrt(ownerDistSq));
+
+		// ReassignEntityInner sets lastMigratedAt, so the hold time applies automatically
+		ReassignEntity(entity->handle, best);
+	}
 }
 
 void ServerGameState::HandleClientDrop(const fx::ClientSharedPtr& client, uint16_t netId, uint32_t slotId)
@@ -3109,6 +3298,36 @@ void ServerGameState::ProcessCloneTakeover(const fx::ClientSharedPtr& client, rl
 
 	if (entity)
 	{
+		// 0xFFFF = relinquish: the sender gives up ownership without naming a target.
+		// Sent by the client when it still owns an object the game has dropped out of the
+		// scene graph, in which case it can no longer produce a valid sync for it. Hand the
+		// entity to the nearest relevant client (same policy as the 10s stuck watchdog) but
+		// immediately, rather than waiting for lastReceivedAt to go stale.
+		// Older clients never send 0xFFFF, so this extension is backwards compatible.
+		if (clientId == 0xFFFF)
+		{
+			auto entityClient = entity->GetClient();
+
+			if (!entityClient || entityClient->GetNetId() != client->GetNetId())
+			{
+				// you can only relinquish what you own
+				return;
+			}
+
+			GS_LOG("%s: %s relinquished object %d\n", __func__, client->GetName(), objectId);
+
+			if (!MoveEntityToCandidate(entity, {}))
+			{
+				// no candidates - keep it unowned if we're allowed to, otherwise let GC have it
+				if (entity->ShouldServerKeepEntity())
+				{
+					ReassignEntity(entity->handle, {});
+				}
+			}
+
+			return;
+		}
+
 		auto tgtCl = (clientId != 0) ? m_instance->GetComponent<fx::ClientRegistry>()->GetClientByNetID(clientId) : client;
 
 		if (!tgtCl)
@@ -7909,6 +8128,7 @@ static InitFunction initFunction([]()
 		g_oneSyncCulling = instance->AddVariable<bool>("onesync_distanceCulling", ConVar_None, true);
 		g_oneSyncVehicleCulling = instance->AddVariable<bool>("onesync_distanceCullVehicles", ConVar_None, false);
 		g_oneSyncForceMigration = instance->AddVariable<bool>("onesync_forceMigration", ConVar_None, true);
+		g_oneSyncBetterOwner = instance->AddVariable<bool>("onesync_betterOwnerMigration", ConVar_None, true);
 		g_oneSyncRadiusFrequency = instance->AddVariable<bool>("onesync_radiusFrequency", ConVar_None, true);
 		g_oneSyncLogVar = instance->AddVariable<std::string>("onesync_logFile", ConVar_None, "");
 		g_oneSyncWorkaround763185 = instance->AddVariable<bool>("onesync_workaround763185", ConVar_None, false);
@@ -8031,3 +8251,4 @@ static InitFunction initFunction([]()
 		}
 	}, 999999);
 });
+

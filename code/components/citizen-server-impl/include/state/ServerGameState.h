@@ -921,6 +921,8 @@ struct SyncEntityState
 	std::chrono::milliseconds createdAt{ 0 };
 	std::chrono::milliseconds lastReceivedAt;
 	std::chrono::milliseconds lastMigratedAt;
+	// throttle for the better-owner pass (mirrors R* CONTROL_TIME)
+	std::chrono::milliseconds lastBetterOwnerCheck{ 0 };
 
 	std::shared_ptr<SyncTreeBase> syncTree;
 
@@ -1686,6 +1688,10 @@ private:
 
 public:
 	bool MoveEntityToCandidate(const fx::sync::SyncEntityPtr& entity, const fx::ClientSharedPtr& client);
+
+	// --- better-owner migration (equivalent of CNetObjProximityMigrateable::TryToPassControlProximity) ---
+	bool IsMigrationEligible(const fx::sync::SyncEntityPtr& entity);
+	void TryBetterOwner(const fx::sync::SyncEntityPtr& entity, const glm::vec3& entityPos, std::chrono::milliseconds now);
 
 	void SendPacket(int peer, net::packet::StateBagPacket& packet) override;
 
